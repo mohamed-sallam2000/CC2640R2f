@@ -1,0 +1,1796 @@
+               .deffile adi_defs__0.asm
+               .deffile ddi_defs__0.asm
+               .deffile reg_defs__0.asm
+               .deffile sce_defs__0.asm
+
+               ; Number of supported tasks
+               .define TASK_COUNT      1
+
+               ; Resource-specified definitions, if any
+               .define AUXIO_I2C_SCL           11
+               .define AUXIO_I2C_SDA           10
+               .define I2C_BASE_DELAY          9
+               .define I2C_EXT_DELAY           4
+               .define I2C_STRETCH_TIMEOUT_US  1
+               .define I2C_WAIT_STRETCH_DELAY  5
+
+
+               .segment begin "Framework"
+
+
+               VectorTable:
+0000 ---- 1408                         jsr         PowerUp
+0001 ---- 040c                         jmp         TaskCtrlReqVector
+0002 ---- 1408                         jsr         PowerUp
+0003 ---- 042c                         jmp         AonRtcCh2Vector
+0004 ---- 1408                         jsr         PowerUp
+0005 ---- 0447                         jmp         Event0Vector
+0006 ---- 1408                         jsr         PowerUp
+0007 ---- 044d                         jmp         TaskAlertAckVector
+
+
+
+
+               PowerUp:
+                                       ; Deassert the power-down request
+0008 ---- 4436                         iobclr      #0, [#IOP_WUC_PWRDWNREQ]
+
+                                       ; Wait for it to take effect
+0009 ---- 2437 /waitForPdAck:          iobtst      #0, [#IOP_WUC_PWRDWNACK]
+000a ---- aefe                         biob1       /waitForPdAck
+
+               FwEmptyFunc:            ; Done
+000b ---- adb7                         rts
+
+
+
+
+               TaskCtrlReqVector:
+                                       ; Clear the vector flag
+000c ---- 6442                         iobset      #0, [#IOP_EVCTL_VECFLAGSCLR]
+
+                                       ; For each task ...
+000d ---- 7000                         ld          R7, #0
+               /loop:
+                                           ; Save the task ID
+000e ---- 7c6b                             st          R7, [#fwCtrlInt/taskId]
+
+                                           ; Handle initialize request, if any
+000f ---- 6872                             ld          R6, [#fwCtrlExt/bvTaskInitializeReq]
+0010 ---- 0068                             ld          R0, #pFwTaskInitializeFuncTable
+0011 ---- 1425                             jsr         /handleReq
+
+                                           ; Handle execute request, if any
+0012 ---- 6873                             ld          R6, [#fwCtrlExt/bvTaskExecuteReq]
+0013 ---- 0069                             ld          R0, #pFwTaskExecuteFuncTable
+0014 ---- 1425                             jsr         /handleReq
+
+                                           ; Handle terminate request, if any
+0015 ---- 6874                             ld          R6, [#fwCtrlExt/bvTaskTerminateReq]
+0016 ---- 006a                             ld          R0, #pFwTaskTerminateFuncTable
+0017 ---- 1425                             jsr         /handleReq
+
+                                           ; Move on to the next task
+0018 ---- 786b                             ld          R7, [#fwCtrlInt/taskId]
+0019 ---- f801                             add         R7, #1
+
+001a ---- fa01                         cmp         R7, #TASK_COUNT
+001b ---- bef2                         bneq        /loop
+
+                                       ; Update which tasks are ...
+001c ---- 7870                         ld          R7, [#fwCtrlExt/bvActiveTasks]
+                                       ; ... currently active ...
+001d ---- 6872                         ld          R6, [#fwCtrlExt/bvTaskInitializeReq]
+001e ---- fd0e                         or          R7, R6
+                                       ; ... and inactive ...
+001f ---- 6874                         ld          R6, [#fwCtrlExt/bvTaskTerminateReq]
+0020 ---- ed92                         inv         R6
+0021 ---- fd06                         and         R7, R6
+0022 ---- 7c70                         st          R7, [#fwCtrlExt/bvActiveTasks]
+
+                                       ; We're READY for another request
+0023 ---- 642d                         iobset      #IOB_EVCTL_SWEV_READY, [#IOP_EVCTL_SWEVSET]
+
+                                       ; Generate an ALERT interrupt if needed before powering back down
+0024 ---- 0450                         jmp         GenAlertInterrupt;
+
+               /handleReq:
+                                       ; Restore the task ID, and load the function pointer (here to avoid pipeline hazard)
+0025 ---- 786b                         ld          R7, [#fwCtrlInt/taskId]
+0026 ---- 8f1f                         ld          R0, [R7+R0]
+
+                                       ; Skip this request?
+0027 ---- ed8f                         lsr         R6, R7
+0028 ---- ec01                         tst         R6, #0x0001
+0029 ---- be01                         bnz         /noSkip
+002a ---- adb7                             rts
+               /noSkip:
+                                       ; Make the call by jump, with return (rts) in the "called" function
+002b ---- 8db7                         jmp         R0
+
+
+
+
+               AonRtcCh2Vector:
+                                       ; Start clearing the RTC event
+002c ---- 6630                         iobset      #IOB_WUC_WUEV_RTC, [#IOP_WUC_WUEVCLR]
+
+                                       ; Clear the vector flag
+002d ---- 6542                         iobset      #1, [#IOP_EVCTL_VECFLAGSCLR]
+
+                                       ; For each task (R0 is the current task ID) ...
+002e ---- 0000                         ld          R0, #0
+               /loop:
+                                           ; ... that is active ...
+002f ---- 1870                             ld          R1, [#fwCtrlExt/bvActiveTasks]
+0030 ---- 9d88                             lsr         R1, R0
+0031 ---- 9c01                             tst         R1, #0x0001
+0032 ---- b60d                             bz          /skip
+
+                                               ; Fetch number of RTC intervals until next execution
+0033 ---- 1067                                 ld          R1, #pFwTaskExecuteScheduleTable
+0034 ---- af19                                 ld          R2, [R1+R0]
+
+                                               ; If not already 0, decrement and store. If then 0 ...
+0035 ---- aa00                                 cmp         R2, #0
+0036 ---- b609                                 beq         /skip
+0037 ---- a8ff                                 add         R2, #-1
+0038 ---- af39                                 st          R2, [R1+R0]
+0039 ---- be06                                 bnz         /skip
+
+                                                   ; ... execute the task
+003a ---- 0c6b                                     st          R0, [#fwCtrlInt/taskId]
+003b ---- 8869                                     add         R0, #pFwTaskExecuteFuncTable
+003c ---- 8f08                                     ld          R0, [R0]
+                                                   ; Insert NOP to avoid pipeline hazard
+003d ---- fd47                                     nop
+003e ---- 9db7                                     jsr         R0
+003f ---- 086b                                     ld          R0, [#fwCtrlInt/taskId]
+               /skip:
+                                           ; Move on to the next task
+0040 ---- 8801                             add         R0, #1
+
+0041 ---- 8a01                         cmp         R0, #TASK_COUNT
+0042 ---- beec                         bneq        /loop
+
+                                       ; Wait for the ACK event to be cleared
+0043 ---- 262f /waitOnRtcClearing:     iobtst      #IOB_WUC_WUEV_RTC, [#IOP_WUC_WUEVFLAGS]
+0044 ---- aefe                         biob1       /waitOnRtcClearing
+0045 ---- 4630                         iobclr      #IOB_WUC_WUEV_RTC, [#IOP_WUC_WUEVCLR]
+
+                                       ; Generate an ALERT interrupt if needed
+0046 ---- 0450                         jmp         GenAlertInterrupt;
+
+
+
+
+               Event0Vector:
+                                       ; Disable and clear the vector flag
+0047 ---- 5527                         iobclr      #IOB_EVCTL_VECCFG1_VEC2_EN, [#IOP_EVCTL_VECCFG1]
+0048 ---- 6642                         iobset      #2, [#IOP_EVCTL_VECFLAGSCLR]
+
+                                       ; Set the task ID
+0049 ---- 0000                         ld          R0, #0
+004a ---- 0c6b                         st          R0, [#fwCtrlInt/taskId]
+
+                                       ; Jump to the event task code
+004b ---- 15c0                         jsr         newTask/event0
+
+                                       ; Generate an ALERT interrupt if needed
+004c ---- 0450                         jmp         GenAlertInterrupt;
+
+
+
+
+               TaskAlertAckVector:
+                                       ; Clear the vector flag
+004d ---- 6742                         iobset      #3, [#IOP_EVCTL_VECFLAGSCLR]
+
+                                       ; Re-enable generation of ALERT interrupts
+004e ---- 03ff                         ld          R0, #-1
+004f ---- 0c6d                         st          R0, [#fwCtrlInt/alertGenMask]
+
+                                       ; Fall through to GenAlertInterrupt to generate another ALERT interrupt if needed
+
+
+
+
+               GenAlertInterrupt:
+                                       ; Do we have any ALERT-generating flags pending?
+0050 ---- 786c                         ld          R7, [#fwCtrlInt/bvTaskIoAlert]
+
+                                       ; Skip if the last I/O ALERT interrupt has not been acknowledged
+0051 ---- 686d                         ld          R6, [#fwCtrlInt/alertGenMask]
+0052 ---- ed37                         tst         R6, R7
+0053 ---- b605                         bz          /skipAlertGen
+
+                                           ; Transfer I/O flags from internal to external
+0054 ---- 0000                             ld          R0, #0
+0055 ---- 0c6c                             st          R0, [#fwCtrlInt/bvTaskIoAlert]
+0056 ---- 7c71                             st          R7, [#fwCtrlExt/bvTaskIoAlert]
+
+                                           ; Generate the ALERT interrupt, and clear the generation mask
+0057 ---- 652d                             iobset      #IOB_EVCTL_SWEV_ALERT, [#IOP_EVCTL_SWEVSET]
+0058 ---- 0c6d                             st          R0, [#fwCtrlInt/alertGenMask]
+               /skipAlertGen:
+                                       ; Fall through to PowerDown ...
+
+
+
+
+               PowerDown:
+                                       ; If there are no unacknowledged ALERTs and no vectors pending ...
+0059 ---- 786d                         ld          R7, [#fwCtrlInt/alertGenMask]
+005a ---- 686e                         ld          R6, [#fwCtrlInt/alertCanPdAuxMask]
+005b ---- fd0e                         or          R7, R6
+005c ---- f801                         add         R7, #1 ; 0xFFFF -> 0x0000
+005d ---- e92b                         in          R6, [#IOP_EVCTL_VECFLAGS]
+005e ---- fd0e                         or          R7, R6
+005f ---- be01                         bnz         /noPowerDown
+
+                                           ; Assert the power-down request. We'll make sure that it has taken effect
+                                           ; or been completely ignored when waking up again
+0060 ---- 6436                             iobset      #0, [#IOP_WUC_PWRDWNREQ]
+               /noPowerDown:
+                                       ; Sleep until the next event
+0061 ---- bdb7 sleepInstr:             sleep
+
+
+
+
+0062 ---- 241a AdiDdiAcquire:          iobtst      #0, [#IOP_SMPH_SMPH0]
+0063 ---- a6fe                         biob0       AdiDdiAcquire
+0064 ---- adb7                         rts
+
+0065 ---- 641a AdiDdiRelease:          iobset      #0, [#IOP_SMPH_SMPH0]
+0066 ---- adb7                         rts
+
+
+
+
+               ; RTC ticks until next execution, one word for each task
+               pFwTaskExecuteScheduleTable:
+0067 ---- 0000                         dw          #0
+
+               ; Task code function pointers for each task code block, one word for each task
+               pFwTaskInitializeFuncTable:
+0068 ---- 00bc                         dw          #newTask/initialize
+               pFwTaskExecuteFuncTable:
+0069 ---- 01bf                         dw          #newTask/execute
+               pFwTaskTerminateFuncTable:
+006a ---- 01c6                         dw          #newTask/terminate
+
+               ; Run-time logging log requests and masks, one bit for each struct, one word for each task
+               pRtlTaskLogReqTable:
+               ; (Run-time logging is not used in this project)
+               pRtlTaskLogMaskTable:
+               ; (Run-time logging is not used in this project)
+
+
+               ; Internal control data
+               fwCtrlInt:
+006b ---- 0000 /taskId:                dw          #0      ; ID of the currently running task
+006c ---- 0000 /bvTaskIoAlert:         dw          #0x0000 ; LSB = Normal data exchange, MSB = Overflow or underflow
+006d ---- ffff /alertGenMask:          dw          #0xFFFF ; Can generate an ALERT interrupt now? (0xFFFF = yes, 0x0000 = no)
+006e ---- 0000 /alertCanPdAuxMask:     dw          #0x0000 ; Can power down AUX domain after ALERT interrupt generation? (0xFFFF = yes, 0x0000 = no)
+006f ---- 0000 /rtlStructLockReq:      dw          #0x0000 ; Run-time logging struct lock request (0=idle -> 1=requested -> 2=ready -> access -> 0=idle)
+
+               ; External control data, shared with the driver
+               fwCtrlExt:
+0070 ---- 0000 /bvActiveTasks:         dw          #0x0000 ; Indicates which tasks are currently active
+0071 ---- 0000 /bvTaskIoAlert:         dw          #0x0000 ; LSB = Normal data exchange, MSB = Overflow or underflow
+0072 ---- 0000 /bvTaskInitializeReq:   dw          #0x0000 ; Requests tasks to start
+0073 ---- 0000 /bvTaskExecuteReq:      dw          #0x0000 ; Requests tasks to execute once immediately
+0074 ---- 0000 /bvTaskTerminateReq:    dw          #0x0000 ; Requests tasks to stop
+
+
+               .segment end "Framework"
+
+
+               fwTaskDataStructures:
+               .segment begin "Task: New task"
+               newTask/cfg:
+               newTask/input:
+               newTask/output:
+               newTask/output/outputDataBuffer:
+0075 ---- 0000                         dw          #0
+0076 ---- 0000                         dw          #0
+0077 ---- 0000                         dw          #0
+0078 ---- 0000                         dw          #0
+0079 ---- 0000                         dw          #0
+007a ---- 0000                         dw          #0
+007b ---- 0000                         dw          #0
+007c ---- 0000                         dw          #0
+007d ---- 0000                         dw          #0
+007e ---- 0000                         dw          #0
+007f ---- 0000                         dw          #0
+0080 ---- 0000                         dw          #0
+0081 ---- 0000                         dw          #0
+0082 ---- 0000                         dw          #0
+0083 ---- 0000                         dw          #0
+0084 ---- 0000                         dw          #0
+0085 ---- 0000                         dw          #0
+0086 ---- 0000                         dw          #0
+0087 ---- 0000                         dw          #0
+0088 ---- 0000                         dw          #0
+0089 ---- 0000                         dw          #0
+008a ---- 0000                         dw          #0
+008b ---- 0000                         dw          #0
+008c ---- 0000                         dw          #0
+008d ---- 0000                         dw          #0
+008e ---- 0000                         dw          #0
+008f ---- 0000                         dw          #0
+0090 ---- 0000                         dw          #0
+0091 ---- 0000                         dw          #0
+0092 ---- 0000                         dw          #0
+0093 ---- 0000                         dw          #0
+0094 ---- 0000                         dw          #0
+0095 ---- 0000                         dw          #0
+0096 ---- 0000                         dw          #0
+0097 ---- 0000                         dw          #0
+               newTask/output/outputsecondbuffer:
+0098 ---- 0000                         dw          #0
+0099 ---- 0000                         dw          #0
+009a ---- 0000                         dw          #0
+009b ---- 0000                         dw          #0
+009c ---- 0000                         dw          #0
+009d ---- 0000                         dw          #0
+009e ---- 0000                         dw          #0
+009f ---- 0000                         dw          #0
+00a0 ---- 0000                         dw          #0
+00a1 ---- 0000                         dw          #0
+00a2 ---- 0000                         dw          #0
+00a3 ---- 0000                         dw          #0
+00a4 ---- 0000                         dw          #0
+00a5 ---- 0000                         dw          #0
+00a6 ---- 0000                         dw          #0
+00a7 ---- 0000                         dw          #0
+00a8 ---- 0000                         dw          #0
+00a9 ---- 0000                         dw          #0
+00aa ---- 0000                         dw          #0
+00ab ---- 0000                         dw          #0
+00ac ---- 0000                         dw          #0
+00ad ---- 0000                         dw          #0
+00ae ---- 0000                         dw          #0
+00af ---- 0000                         dw          #0
+00b0 ---- 0000                         dw          #0
+00b1 ---- 0000                         dw          #0
+00b2 ---- 0000                         dw          #0
+00b3 ---- 0000                         dw          #0
+00b4 ---- 0000                         dw          #0
+00b5 ---- 0000                         dw          #0
+00b6 ---- 0000                         dw          #0
+00b7 ---- 0000                         dw          #0
+00b8 ---- 0000                         dw          #0
+00b9 ---- 0000                         dw          #0
+00ba ---- 0000                         dw          #0
+               newTask/state:
+               newTask/state/i2cStatus:
+00bb ---- 0000                         dw          #0
+               .segment end "Task: New task"
+
+
+               .segment begin "Task: New task"
+               newTask/initialize:
+               ;? //here we will define the max30102 main functions
+               ;? //
+               ;? macro maxim_max30102_read_reg( uch_addr, puch_data) {
+               ;?     //puch_data will store the output data to this var
+               ;?     i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+               ;?
+               ;? }
+               ;?
+               ;? macro maxim_max30102_write_reg( uch_addr,  uch_data) {
+               ;?
+               ;?
+               ;?     //* \brief        Write a value to a MAX30102 register
+               ;?     //* \par          Details
+               ;?     //*               This function writes a value to a MAX30102 register
+               ;?
+               ;?     //* \param[in]    uch_addr    - register address
+               ;?     //* \param[in]    uch_data    - register data
+               ;?     //*
+               ;?     //* \retval       none
+               ;?
+               ;?
+               ;?     i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+               ;?
+               ;?
+               ;? }
+               ;?
+               ;? ///*sample rate& adc resolution
+               ;?
+               ;? //*The maximum sample rate for the ADC depends on the
+               ;? //*selected pulse width, which in turn, determines the ADC
+               ;? //resolution. For instance, if the pulse width is set to 69µs
+               ;? // the ADC resolution is 15 bits, and all sample rates are
+               ;? //selectable. However, if the pulse width is set to 411µs, then
+               ;? //the samples rates are limited. The allowed sample rates for
+               ;? //both SpO2 and HR Modes are summarized in the Table 11*/
+               ;? //and Table 12.
+               ;? macro maxim_max30102_init( ) {
+               ;?     U16 uch_dummy;
+               ;?     i2cStart();
+               ;?     maxim_max30102_read_reg(REG_INTR_STATUS_1,uch_dummy);  //Reads/clears the interrupt status register
+               ;?
+               ;?     maxim_max30102_write_reg(REG_INTR_ENABLE_1,0x00); // INTR setting
+               ;?
+               ;?     maxim_max30102_write_reg(REG_INTR_ENABLE_2,0x00);
+               ;?
+               ;?     maxim_max30102_write_reg(REG_FIFO_WR_PTR,0x00);  //FIFO_WR_PTR[4:0]
+               ;?
+               ;?     maxim_max30102_write_reg(REG_OVF_COUNTER,0x00);  //OVF_COUNTER[4:0]
+               ;?
+               ;?     maxim_max30102_write_reg(REG_FIFO_RD_PTR,0x00);  //FIFO_RD_PTR[4:0]
+               ;?
+               ;?     maxim_max30102_write_reg(REG_FIFO_CONFIG,0x50);  //sample avg = 4, fifo rollover=false, fifo almost full = 17 is equal 0x4f  i will be equal 0x01010000 wich mean rool over and 4 avrage sample
+               ;?     maxim_max30102_write_reg(REG_TEMP_CONFIG,0x1); // Enabling TEMP_EN
+               ;?
+               ;?     //commented to use in the wake up and start
+               ;?     //if(!maxim_max30102_write_reg(REG_MODE_CONFIG,0x07))   //0x02 for Red only, 0x03 for SpO2 mode 0x07 multimode LED
+               ;?     //  return false;
+               ;?     // maxim_max30102_write_reg(REG_MODE_CONFIG,0x02);//red only
+               ;?     maxim_max30102_write_reg(REG_SPO2_CONFIG,0x27); // SPO2_ADC range = 4096nA, SPO2 sample rate (100 Hz), LED pulseWidth (411uS) ADC res=18 bit
+               ;?
+               ;?
+               ;?     maxim_max30102_write_reg(REG_LED1_PA,0x00);  //Choose value for ~ 7mA for LED1=ir sample one is ir
+               ;?     maxim_max30102_write_reg(REG_LED2_PA,0x7f);  // Choose value for ~ 7mA for LED2=red
+               ;?
+               ;?     // commented till try as it isnot in datasheet
+               ;?     // maxim_max30102_write_reg(REG_PILOT_PA,0x7f); // Choose value for ~ 25mA for Pilot LED
+               ;?
+               ;? }
+               ;? //The FIFO registers (0x04–0x07) can all be written and read, but in practice only the FIFO_RD_PTR register should be
+               ;? //written to in operation. The others are automatically incremented or filled with data by the MAX30102. When starting a new
+               ;? //SpO2 or heart rate conversion, it is recommended to first clear the FIFO_WR_PTR, OVF_COUNTER, and FIFO_RD_PTR
+               ;? //registers to all zeroes (0x00) to ensure the FIFO is empty and in a known state. When reading the MAX30102 registers in
+               ;? //one burst-read I2C transaction, the register address pointer typically increments so that the next byte of data sent is from
+               ;? //the next register, etc. The exception to this is the FIFO data register, register 0x07. When reading this register, the address
+               ;? //pointer does not increment, but the FIFO_RD_PTR does. So the next byte of data sent represents the next byte of data
+               ;? //available in the FIFO.
+               ;? //#if defined(ARDUINO_AVR_UNO)
+               ;? //Arduino Uno doesn't have enough SRAM to store 100 samples of IR led data and red led data in 32-bit format
+               ;? //To solve this problem, 16-bit MSB of the sampled data will be truncated.  Samples become 16-bit data.
+               ;? macro maxim_max30102_read_fifo() {
+               ;?     // must wake up first
+               ;?     //bool maxim_max30102_read_fifo(uint32_t *pun_red_led, uint32_t *pun_ir_led)
+               ;?     //#endif
+               ;?
+               ;?     //* \brief        Read a set of samples from the MAX30102 FIFO register
+               ;?     //* \par          Details
+               ;?     //*               This function reads a set of samples from the MAX30102 FIFO register
+               ;?
+               ;?     //* \param[out]   *pun_red_led   - pointer that stores the red LED reading data
+               ;?     //* \param[out]   *pun_ir_led    - pointer that stores the IR LED reading data
+               ;?
+               ;?
+               ;?
+               ;?     U16 un_temp;
+               ;?     U16 un_temp2;
+               ;?     U16 un_temp3;
+               ;?     maxim_max30102_read_reg(REG_INTR_STATUS_1, un_temp);
+               ;?     maxim_max30102_read_reg(REG_INTR_STATUS_2, un_temp);
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?     // Accelerometer (I2C address 0x43+W): Write X register address (0x04)
+               ;?     i2cStart();
+               ;?     i2cTx(MAX30102_ADDR | I2C_OP_WRITE);
+               ;?     i2cTx(REG_FIFO_DATA);
+               ;?
+               ;?     i2cStop();
+               ;?
+               ;?     for(U16 n=0;n<buffer_size_share_readings_cpu_sc; n++){
+               ;?
+               ;?
+               ;?         // Accelerometer (I2C address 0x43+R): Read X/Y/Z register values
+               ;?         i2cRepeatedStart();
+               ;?         i2cTx(MAX30102_ADDR | I2C_OP_READ);
+               ;?
+               ;?         //for ir led
+               ;?         i2cRxAck(un_temp);
+               ;?         i2cRxAck(un_temp2);
+               ;?         i2cRxAck(un_temp3);
+               ;?
+               ;?         //pop ir without store values
+               ;?
+               ;?         //for red led
+               ;?         i2cRxAck(un_temp);
+               ;?         i2cRxAck(un_temp2);
+               ;?         i2cRxNack(un_temp3);
+               ;?
+               ;?         //for red led store
+               ;?         //byte1--byte2--byte3
+               ;?         //(n-((n/2)*2)
+               ;?
+               ;?         //byte 1&2}
+               ;?
+               ;?
+               ;?
+               ;?         output.outputDataBuffer[n]=(((un_temp<<8)|un_temp2));//0x03fff
+               ;?         //   n+=1;
+               ;?         output.outputsecondbuffer[n]=un_temp3;
+               ;?         //byte1--byte2--byte3
+               ;?
+               ;?
+               ;?     }
+               ;?
+               ;?        output.outputDataBuffer[2]=5;//0x03fff
+               ;?     i2cStop();
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;? }
+               ;?
+               ;? macro maxim_max30102_reset() {
+               ;?     maxim_max30102_write_reg(REG_MODE_CONFIG,0x40);
+               ;?
+               ;? }
+               ;?
+               ;? macro maxim_max30102_wakeup(){
+               ;?
+               ;?     maxim_max30102_write_reg(REG_MODE_CONFIG,0x03);
+               ;? }
+               ;? macro maxim_max30102_shutdown(){
+               ;?
+               ;?     maxim_max30102_write_reg(REG_MODE_CONFIG,0x80);
+               ;? }
+               ;? macro maxim_max30102_read_temperature(){
+               ;?
+               ;?     maxim_max30102_write_reg(REG_TEMP_CONFIG,0x1); // Enabling TEMP_EN
+               ;?     //delayMicroseconds(1); // Let the processor do its work
+               ;?     // For proper conversion, read the integer part as uint8_t
+               ;?     U16 temp;
+               ;?     maxim_max30102_read_reg(REG_TEMP_INTR, temp); // 2's complement integer part of the temperature in degrees Celsius
+               ;?     output.outputDataBuffer[33]= temp;
+               ;?     maxim_max30102_read_reg(REG_TEMP_FRAC, temp); // Fractional part of the temperature in 1/16-th degree Celsius
+               ;?     output.outputDataBuffer[34]= temp;
+               ;?
+               ;?
+               ;? }
+               ;? macro maxim_max30102_start(){
+               ;?
+               ;?
+               ;?     maxim_max30102_init();  //initialize the MAX30102
+               ;?
+               ;?
+               ;?
+               ;?     fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+               ;?
+               ;?     //Continuously taking samples from MAX30102.  Heart rate and SpO2 are calculated every ST seconds
+               ;?
+               ;?
+               ;?     //buffer length of BUFFER_SIZE stores ST seconds of samples running at FS sps
+               ;?     //read BUFFER_SIZE samples, and determine the signal range
+               ;?     U16 uch_dummy=0;
+               ;?
+               ;?     maxim_max30102_read_reg(REG_INTR_STATUS_1,uch_dummy);
+               ;?
+               ;?
+               ;?     maxim_max30102_read_fifo();  //read from MAX30102 FIFO red and ir leds
+               ;?
+               ;?
+               ;?     //calculate heart rate and SpO2 after BUFFER_SIZE samples (ST seconds of samples) using MAXIM's method
+               ;?     // maxim_heart_rate_and_oxygen_saturation(aun_ir_buffer, BUFFER_SIZE, aun_red_buffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid);
+               ;?     //elapsedTime=millis()-timeStart;
+               ;?     //elapsedTime/=1000; // Time in seconds
+               ;?
+               ;?     // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+               ;?
+               ;?     // Read the _chip_ temperature in degrees Celsius
+               ;?
+               ;?     maxim_max30102_read_temperature();
+               ;?
+               ;?
+               ;? }
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;?
+               ;? //fwGenAlertInterrupt();
+               ;?
+               ;?
+               ;? // Set up Timer 1 to generate events at ~20 Hz
+               ;? //timer1StartWithTickSrc(TIMER1_TICKSRC_AON_RTC_4KHZ, 1, TIMER1_MODE_PERIODICAL, 94,7);
+               ;?
+               ;? // Setup the first timer trigger
+               ;? //evhSetupTimer1CustomTrigger(0);
+               ;? //The Initialization Code must schedule the first execution and/or setup the initial event trigger(s)
+               ;? //fwScheduleTask(1);
+               ;? ///**********excution ******************/
+               ;? i2cStart();
+00bc ---- 6000                         ld          R6, #0x0000
+00bd ---- 15cd                         jsr         I2cStart
+00be ---- 6cbb                         st          R6, [#newTask/state/i2cStatus]
+               ;? //maxim_max30102_init();  //initialize the MAX30102
+               ;? //maxim_max30102_shutdown();
+               ;?
+               ;? //maxim_max30102_start();
+               ;?
+               ;? U16 p=0;
+00bf ---- 1000                         ld          R1, #0
+               ;?
+               ;? while(p<36) {
+               /id0171:
+00c0 ---- 9a24                         cmp         R1, #36
+00c1 ---- ae01                         bltu        /br0000 ; Repaired out-of-range bgeu
+00c2 ---- 05bc                         jmp         /id0172
+               /br0000:
+               ;?
+               ;?
+               ;?     // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+               ;?
+               ;?     maxim_max30102_reset();
+               ;?     >   maxim_max30102_write_reg(REG_MODE_CONFIG,0x40);
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   //* \par          Details
+               ;?     >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >
+               ;?     >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   //*
+               ;?     >   >   //* \retval       none
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+00c3 ---- 5009                             ld          R5, #9
+00c4 ---- 4040                             ld          R4, #64
+00c5 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00c6 ---- 70ca                             ld          R7, #/id0174
+00c7 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+00c8 ---- 70ae                             ld          R7, #(174 | 0)
+00c9 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0174:
+00ca ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+00cb ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >
+               ;?     >
+               ;?
+               ;?
+               ;?     //fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+               ;?     maxim_max30102_wakeup();
+               ;?     >
+               ;?     >   maxim_max30102_write_reg(REG_MODE_CONFIG,0x03);
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   //* \par          Details
+               ;?     >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >
+               ;?     >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   //*
+               ;?     >   >   //* \retval       none
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+00cc ---- 5009                             ld          R5, #9
+00cd ---- 4003                             ld          R4, #3
+00ce ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00cf ---- 70d3                             ld          R7, #/id0180
+00d0 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+00d1 ---- 70ae                             ld          R7, #(174 | 0)
+00d2 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0180:
+00d3 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+00d4 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >
+               ;?
+               ;?
+               ;?     // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+               ;?     maxim_max30102_start();
+               ;?     >
+               ;?     >
+               ;?     >   maxim_max30102_init();  //initialize the MAX30102
+               ;?     >   >   U16 uch_dummy;
+               ;?     >   >   i2cStart();
+00d5 ---- 6000                             ld          R6, #0x0000
+00d6 ---- 15cd                             jsr         I2cStart
+00d7 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   maxim_max30102_read_reg(REG_INTR_STATUS_1,uch_dummy);  //Reads/clears the interrupt status register
+               ;?     >   >   >   //puch_data will store the output data to this var
+               ;?     >   >   >   i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+00d8 ---- 5000                             ld          R5, #0
+00d9 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00da ---- 70de                             ld          R7, #/id0188
+00db ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+00dc ---- 70ae                             ld          R7, #(174 | 0)
+00dd ---- 061c                             jmp         I2cDeviceReadReg8
+               /id0188:
+00de ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+00df ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_INTR_ENABLE_1,0x00); // INTR setting
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+00e0 ---- 5002                             ld          R5, #2
+00e1 ---- 4000                             ld          R4, #0
+00e2 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00e3 ---- 70e7                             ld          R7, #/id0194
+00e4 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+00e5 ---- 70ae                             ld          R7, #(174 | 0)
+00e6 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0194:
+00e7 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+00e8 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_INTR_ENABLE_2,0x00);
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+00e9 ---- 5003                             ld          R5, #3
+00ea ---- 4000                             ld          R4, #0
+00eb ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00ec ---- 70f0                             ld          R7, #/id0200
+00ed ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+00ee ---- 70ae                             ld          R7, #(174 | 0)
+00ef ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0200:
+00f0 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+00f1 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_FIFO_WR_PTR,0x00);  //FIFO_WR_PTR[4:0]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+00f2 ---- 5004                             ld          R5, #4
+00f3 ---- 4000                             ld          R4, #0
+00f4 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00f5 ---- 70f9                             ld          R7, #/id0206
+00f6 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+00f7 ---- 70ae                             ld          R7, #(174 | 0)
+00f8 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0206:
+00f9 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+00fa ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_OVF_COUNTER,0x00);  //OVF_COUNTER[4:0]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+00fb ---- 5005                             ld          R5, #5
+00fc ---- 4000                             ld          R4, #0
+00fd ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+00fe ---- 7102                             ld          R7, #/id0212
+00ff ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0100 ---- 70ae                             ld          R7, #(174 | 0)
+0101 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0212:
+0102 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0103 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_FIFO_RD_PTR,0x00);  //FIFO_RD_PTR[4:0]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+0104 ---- 5006                             ld          R5, #6
+0105 ---- 4000                             ld          R4, #0
+0106 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0107 ---- 710b                             ld          R7, #/id0218
+0108 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0109 ---- 70ae                             ld          R7, #(174 | 0)
+010a ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0218:
+010b ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+010c ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_FIFO_CONFIG,0x50);  //sample avg = 4, fifo rollover=false, fifo almost full = 17 is equal 0x4f  i will be equal 0x01010000 wich mean rool over and 4 avrage sample
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+010d ---- 5008                             ld          R5, #8
+010e ---- 4050                             ld          R4, #80
+010f ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0110 ---- 7114                             ld          R7, #/id0224
+0111 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0112 ---- 70ae                             ld          R7, #(174 | 0)
+0113 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0224:
+0114 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0115 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_TEMP_CONFIG,0x1); // Enabling TEMP_EN
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+0116 ---- 5021                             ld          R5, #33
+0117 ---- 4001                             ld          R4, #1
+0118 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0119 ---- 711d                             ld          R7, #/id0230
+011a ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+011b ---- 70ae                             ld          R7, #(174 | 0)
+011c ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0230:
+011d ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+011e ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   //commented to use in the wake up and start
+               ;?     >   >   //if(!maxim_max30102_write_reg(REG_MODE_CONFIG,0x07))   //0x02 for Red only, 0x03 for SpO2 mode 0x07 multimode LED
+               ;?     >   >   //  return false;
+               ;?     >   >   // maxim_max30102_write_reg(REG_MODE_CONFIG,0x02);//red only
+               ;?     >   >   maxim_max30102_write_reg(REG_SPO2_CONFIG,0x27); // SPO2_ADC range = 4096nA, SPO2 sample rate (100 Hz), LED pulseWidth (411uS) ADC res=18 bit
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+011f ---- 500a                             ld          R5, #10
+0120 ---- 4027                             ld          R4, #39
+0121 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0122 ---- 7126                             ld          R7, #/id0236
+0123 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0124 ---- 70ae                             ld          R7, #(174 | 0)
+0125 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0236:
+0126 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0127 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_LED1_PA,0x00);  //Choose value for ~ 7mA for LED1=ir sample one is ir
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+0128 ---- 500c                             ld          R5, #12
+0129 ---- 4000                             ld          R4, #0
+012a ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+012b ---- 712f                             ld          R7, #/id0242
+012c ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+012d ---- 70ae                             ld          R7, #(174 | 0)
+012e ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0242:
+012f ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0130 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_LED2_PA,0x7f);  // Choose value for ~ 7mA for LED2=red
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+0131 ---- 500d                             ld          R5, #13
+0132 ---- 407f                             ld          R4, #127
+0133 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0134 ---- 7138                             ld          R7, #/id0248
+0135 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0136 ---- 70ae                             ld          R7, #(174 | 0)
+0137 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0248:
+0138 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0139 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >   // commented till try as it isnot in datasheet
+               ;?     >   >   // maxim_max30102_write_reg(REG_PILOT_PA,0x7f); // Choose value for ~ 25mA for Pilot LED
+               ;?     >   >
+               ;?     >
+               ;?     >
+               ;?     >
+               ;?     >   fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+013a ---- 7093                             ld          R7, #(((100000 * 24 ) + ((1 << 14) - 1)) >> 14)
+013b ---- 600e                             ld          R6, #14
+013c ---- 164d                             jsr         FwDelay
+               ;?     >
+               ;?     >   //Continuously taking samples from MAX30102.  Heart rate and SpO2 are calculated every ST seconds
+               ;?     >
+               ;?     >
+               ;?     >   //buffer length of BUFFER_SIZE stores ST seconds of samples running at FS sps
+               ;?     >   //read BUFFER_SIZE samples, and determine the signal range
+               ;?     >   U16 uch_dummy=0;
+               ;?     >
+               ;?     >   maxim_max30102_read_reg(REG_INTR_STATUS_1,uch_dummy);
+               ;?     >   >   //puch_data will store the output data to this var
+               ;?     >   >   i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+013d ---- 5000                             ld          R5, #0
+013e ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+013f ---- 7143                             ld          R7, #/id0257
+0140 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0141 ---- 70ae                             ld          R7, #(174 | 0)
+0142 ---- 061c                             jmp         I2cDeviceReadReg8
+               /id0257:
+0143 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0144 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >
+               ;?     >
+               ;?     >   maxim_max30102_read_fifo();  //read from MAX30102 FIFO red and ir leds
+               ;?     >   >   // must wake up first
+               ;?     >   >   //bool maxim_max30102_read_fifo(uint32_t *pun_red_led, uint32_t *pun_ir_led)
+               ;?     >   >   //#endif
+               ;?     >   >
+               ;?     >   >   //* \brief        Read a set of samples from the MAX30102 FIFO register
+               ;?     >   >   //* \par          Details
+               ;?     >   >   //*               This function reads a set of samples from the MAX30102 FIFO register
+               ;?     >   >
+               ;?     >   >   //* \param[out]   *pun_red_led   - pointer that stores the red LED reading data
+               ;?     >   >   //* \param[out]   *pun_ir_led    - pointer that stores the IR LED reading data
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   U16 un_temp;
+               ;?     >   >   U16 un_temp2;
+               ;?     >   >   U16 un_temp3;
+               ;?     >   >   maxim_max30102_read_reg(REG_INTR_STATUS_1, un_temp);
+               ;?     >   >   >   //puch_data will store the output data to this var
+               ;?     >   >   >   i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+0145 ---- 5000                             ld          R5, #0
+0146 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0147 ---- 714b                             ld          R7, #/id0263
+0148 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0149 ---- 70ae                             ld          R7, #(174 | 0)
+014a ---- 061c                             jmp         I2cDeviceReadReg8
+               /id0263:
+014b ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+014c ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   maxim_max30102_read_reg(REG_INTR_STATUS_2, un_temp);
+               ;?     >   >   >   //puch_data will store the output data to this var
+               ;?     >   >   >   i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+014d ---- 5001                             ld          R5, #1
+014e ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+014f ---- 7153                             ld          R7, #/id0269
+0150 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0151 ---- 70ae                             ld          R7, #(174 | 0)
+0152 ---- 061c                             jmp         I2cDeviceReadReg8
+               /id0269:
+0153 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+0154 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   // Accelerometer (I2C address 0x43+W): Write X register address (0x04)
+               ;?     >   >   i2cStart();
+0155 ---- 6000                             ld          R6, #0x0000
+0156 ---- 15cd                             jsr         I2cStart
+0157 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   i2cTx(MAX30102_ADDR | I2C_OP_WRITE);
+0158 ---- 70ae                             ld          R7, #174
+0159 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+015a ---- 15fe                             jsr         I2cTxByte
+015b ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   i2cTx(REG_FIFO_DATA);
+015c ---- 7007                             ld          R7, #7
+015d ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+015e ---- 15fe                             jsr         I2cTxByte
+015f ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >   i2cStop();
+0160 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0161 ---- 15f3                             jsr         I2cStop
+0162 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >   for(U16 n=0;n<buffer_size_share_readings_cpu_sc; n++){
+0163 ---- 0000                             ld          R0, #0
+               /id0316:
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >       // Accelerometer (I2C address 0x43+R): Read X/Y/Z register values
+               ;?     >   >       i2cRepeatedStart();
+0164 ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+0165 ---- 15c7                                 jsr         I2cRepeatedStart
+0166 ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >       i2cTx(MAX30102_ADDR | I2C_OP_READ);
+0167 ---- 70af                                 ld          R7, #175
+0168 ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+0169 ---- 15fe                                 jsr         I2cTxByte
+016a ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >       //for ir led
+               ;?     >   >       i2cRxAck(un_temp);
+016b ---- 7000                                 ld          R7, #0x0000
+016c ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+016d ---- 162e                                 jsr         I2cRxByte
+016e ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >       i2cRxAck(un_temp2);
+016f ---- 7000                                 ld          R7, #0x0000
+0170 ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+0171 ---- 162e                                 jsr         I2cRxByte
+0172 ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >       i2cRxAck(un_temp3);
+0173 ---- 7000                                 ld          R7, #0x0000
+0174 ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+0175 ---- 162e                                 jsr         I2cRxByte
+0176 ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >       //pop ir without store values
+               ;?     >   >
+               ;?     >   >       //for red led
+               ;?     >   >       i2cRxAck(un_temp);
+0177 ---- 7000                                 ld          R7, #0x0000
+0178 ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+0179 ---- 162e                                 jsr         I2cRxByte
+017a ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+017b ---- cd47                                 ld          R4, R7
+               ;?     >   >       i2cRxAck(un_temp2);
+017c ---- 7000                                 ld          R7, #0x0000
+017d ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+017e ---- 162e                                 jsr         I2cRxByte
+017f ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+0180 ---- ad47                                 ld          R2, R7
+               ;?     >   >       i2cRxNack(un_temp3);
+0181 ---- 7001                                 ld          R7, #0x0001
+0182 ---- 68bb                                 ld          R6, [#newTask/state/i2cStatus]
+0183 ---- 162e                                 jsr         I2cRxByte
+0184 ---- 6cbb                                 st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >       //for red led store
+               ;?     >   >       //byte1--byte2--byte3
+               ;?     >   >       //(n-((n/2)*2)
+               ;?     >   >
+               ;?     >   >       //byte 1&2}
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >       output.outputDataBuffer[n]=(((un_temp<<8)|un_temp2));//0x03fff
+0185 ---- cda0                                 lsl         R4, #8
+0186 ---- cd0a                                 or          R4, R2
+0187 ---- 2075                                 ld          R2, #(newTask/output/outputDataBuffer + 0)
+0188 ---- cf3a                                 st          R4, [R2+R0]
+               ;?     >   >       //   n+=1;
+               ;?     >   >       output.outputsecondbuffer[n]=un_temp3;
+0189 ---- 2098                                 ld          R2, #(newTask/output/outputsecondbuffer + 0)
+018a ---- ff3a                                 st          R7, [R2+R0]
+               ;?     >   >       //byte1--byte2--byte3
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   }
+018b ---- 8801                             add         R0, #1
+018c ---- 8a23                             cmp         R0, #35
+018d ---- aed6                             bltu        /id0316
+               ;?     >   >
+               ;?     >   >      output.outputDataBuffer[2]=5;//0x03fff
+018e ---- 0005                             ld          R0, #5
+018f ---- 0c77                             st          R0, [#(newTask/output/outputDataBuffer + 2)]
+               ;?     >   >   i2cStop();
+0190 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0191 ---- 15f3                             jsr         I2cStop
+0192 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >
+               ;?     >
+               ;?     >
+               ;?     >   //calculate heart rate and SpO2 after BUFFER_SIZE samples (ST seconds of samples) using MAXIM's method
+               ;?     >   // maxim_heart_rate_and_oxygen_saturation(aun_ir_buffer, BUFFER_SIZE, aun_red_buffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid);
+               ;?     >   //elapsedTime=millis()-timeStart;
+               ;?     >   //elapsedTime/=1000; // Time in seconds
+               ;?     >
+               ;?     >   // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+               ;?     >
+               ;?     >   // Read the _chip_ temperature in degrees Celsius
+               ;?     >
+               ;?     >   maxim_max30102_read_temperature();
+               ;?     >   >
+               ;?     >   >   maxim_max30102_write_reg(REG_TEMP_CONFIG,0x1); // Enabling TEMP_EN
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   >   //* \par          Details
+               ;?     >   >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >   >
+               ;?     >   >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   >   //*
+               ;?     >   >   >   //* \retval       none
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+0193 ---- 5021                             ld          R5, #33
+0194 ---- 4001                             ld          R4, #1
+0195 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+0196 ---- 719a                             ld          R7, #/id0320
+0197 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+0198 ---- 70ae                             ld          R7, #(174 | 0)
+0199 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0320:
+019a ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+019b ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   >
+               ;?     >   >   //delayMicroseconds(1); // Let the processor do its work
+               ;?     >   >   // For proper conversion, read the integer part as uint8_t
+               ;?     >   >   U16 temp;
+               ;?     >   >   maxim_max30102_read_reg(REG_TEMP_INTR, temp); // 2's complement integer part of the temperature in degrees Celsius
+               ;?     >   >   >   //puch_data will store the output data to this var
+               ;?     >   >   >   i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+019c ---- 501f                             ld          R5, #31
+019d ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+019e ---- 71a2                             ld          R7, #/id0326
+019f ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+01a0 ---- 70ae                             ld          R7, #(174 | 0)
+01a1 ---- 061c                             jmp         I2cDeviceReadReg8
+               /id0326:
+01a2 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+01a3 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   output.outputDataBuffer[33]= temp;
+01a4 ---- 7c96                             st          R7, [#(newTask/output/outputDataBuffer + 33)]
+               ;?     >   >   maxim_max30102_read_reg(REG_TEMP_FRAC, temp); // Fractional part of the temperature in 1/16-th degree Celsius
+               ;?     >   >   >   //puch_data will store the output data to this var
+               ;?     >   >   >   i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+01a5 ---- 5020                             ld          R5, #32
+01a6 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+01a7 ---- 71ab                             ld          R7, #/id0333
+01a8 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+01a9 ---- 70ae                             ld          R7, #(174 | 0)
+01aa ---- 061c                             jmp         I2cDeviceReadReg8
+               /id0333:
+01ab ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+01ac ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >   >
+               ;?     >   >   output.outputDataBuffer[34]= temp;
+01ad ---- 7c97                             st          R7, [#(newTask/output/outputDataBuffer + 34)]
+               ;?     >   >
+               ;?     >   >
+               ;?     >
+               ;?     >
+               ;?
+               ;?
+               ;?     // maxim_max30102_read_temperature();
+               ;?
+               ;?
+               ;?
+               ;?     maxim_max30102_shutdown();
+               ;?     >
+               ;?     >   maxim_max30102_write_reg(REG_MODE_CONFIG,0x80);
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   //* \brief        Write a value to a MAX30102 register
+               ;?     >   >   //* \par          Details
+               ;?     >   >   //*               This function writes a value to a MAX30102 register
+               ;?     >   >
+               ;?     >   >   //* \param[in]    uch_addr    - register address
+               ;?     >   >   //* \param[in]    uch_data    - register data
+               ;?     >   >   //*
+               ;?     >   >   //* \retval       none
+               ;?     >   >
+               ;?     >   >
+               ;?     >   >   i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+01ae ---- 5009                             ld          R5, #9
+01af ---- 4080                             ld          R4, #128
+01b0 ---- 68bb                             ld          R6, [#newTask/state/i2cStatus]
+01b1 ---- 71b5                             ld          R7, #/id0340
+01b2 ---- 7de7                             st          R7, [#i2cDeviceCommonReturn]
+01b3 ---- 70ae                             ld          R7, #(174 | 0)
+01b4 ---- 05e8                             jmp         I2cDeviceWriteReg8
+               /id0340:
+01b5 ---- 09e4                             ld          R0, [#i2cDeviceCommonBackupR0]
+01b6 ---- 6cbb                             st          R6, [#newTask/state/i2cStatus]
+               ;?     >   >
+               ;?     >   >
+               ;?
+               ;?
+               ;?     fwGenAlertInterrupt();
+01b7 ---- 086c                             ld          R0, [#fwCtrlInt/bvTaskIoAlert]
+01b8 ---- 8201                             or          R0, #(1 << 0)
+01b9 ---- 0c6c                             st          R0, [#fwCtrlInt/bvTaskIoAlert]
+               ;?     p+=1;
+01ba ---- 9801                             add         R1, #1
+               ;?
+               ;? }
+01bb ---- 04c0                         jmp         /id0171
+               /id0172:
+               ;?
+               ;?
+               ;?
+               ;?
+               ;? //fwGenAlertInterrupt();
+               ;?
+               ;?
+               ;? // Set up Timer 1 to generate events at ~20 Hz
+               ;? //timer1StartWithTickSrc(TIMER1_TICKSRC_AON_RTC_4KHZ, 1, TIMER1_MODE_PERIODICAL, 94,7);
+               ;?
+               ;? // Setup the first timer trigger
+               ;? //evhSetupTimer1CustomTrigger(0);
+               ;? //The Initialization Code must schedule the first execution and/or setup the initial event trigger(s)
+               ;? fwScheduleTask(1);
+01bc ---- 0001                         ld          R0, #1
+01bd ---- 0c67                         st          R0, [#(pFwTaskExecuteScheduleTable + 0)]
+               newTask/initializeDone:
+01be ---- adb7                         rts
+
+
+
+
+               newTask/execute:
+               ;?
+               newTask/executeDone:
+01bf ---- adb7                         rts
+
+
+
+
+               newTask/event0:
+               ;? fwGenAlertInterrupt();
+01c0 ---- 086c                         ld          R0, [#fwCtrlInt/bvTaskIoAlert]
+01c1 ---- 8201                         or          R0, #(1 << 0)
+01c2 ---- 0c6c                         st          R0, [#fwCtrlInt/bvTaskIoAlert]
+               ;? // Set up the next timer trigger (5minutes)
+               ;? evhSetupTimer1CustomTrigger(0);
+01c3 ---- 7025                         ld          R7, #(BV_EVCTL_VECCFG1_VEC2_EN | (EVCTL_VECEVSEL_TIMER1_EV << IOB_EVCTL_VECCFG1_VEC2_EV))
+01c4 ---- 1653                         jsr         EvhSetupTrigger
+               newTask/event0Done:
+01c5 ---- adb7                         rts
+
+
+
+
+               newTask/terminate:
+               ;?
+               newTask/terminateDone:
+01c6 ---- adb7                         rts
+               .segment end "Task: New task"
+
+
+               .segment begin "Procedure Library"
+               ; CLOBBERS:
+               ;     R5
+               I2cRepeatedStart:
+                                       ; Wait T_LOW (SDA is already pull-up)
+01c7 ---- 53f4                         ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (1))
+01c8 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SCL = pull-up
+01c9 ---- 670f                         iobset      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                       ; Wait for SCL stretching to end or time out
+01ca ---- 15d5                         jsr         I2cWaitSclStretch
+
+                                       ; Wait T_SU_STA
+01cb ---- 53f4                         ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (1))
+01cc ---- 15d2                         jsr         I2cWaitDelay
+               I2cStart:
+                                       ; SDA = driven low
+01cd ---- 460f                         iobclr      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+
+                                       ; Wait T_HD_STA
+01ce ---- 53f8                         ld          R5, #-((I2C_BASE_DELAY) - (1))
+01cf ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SCL = driven low
+01d0 ---- 470f                         iobclr      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                       ; Done
+01d1 ---- adb7                         rts
+
+
+
+
+               ; PARAMETERS
+               ;     R5 = Delay excluding the I2cWaitDelay() call, in instruction cycles
+               ;
+               ; CLOBBERS:
+               ;     R5
+               I2cWaitDelay:
+                                       ; Wait for the specified number of cycles
+01d2 ---- d802 /waitLoop:                  add         R5, #2
+01d3 ---- defe                         bneg        /waitLoop
+
+                                       ; Done
+01d4 ---- adb7                         rts
+
+
+
+
+               ; PARAMETERS:
+               ;     R6 = Status flags
+               ;
+               ; RETURN VALUES:
+               ;     R6 = Updated status flags
+               ;
+               ; CLOBBERS:
+               ;     R5
+               I2cWaitSclStretch:
+                                       ; Load the timeout (up to 20 ms) loop counter = configured number of us
+01d5 ---- 53ff                         ld          R5, #(-I2C_STRETCH_TIMEOUT_US)
+               /waitLoop:
+                                           ; If SCL is high, we're done
+01d6 ---- 2713                             iobtst      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SCL >> 3))]
+01d7 ---- ae0b                             biob1       /done
+                                           ; Unroll the loop to 12 instructions = 1 per loop for faster response
+01d8 ---- 2713                             iobtst      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SCL >> 3))]
+01d9 ---- ae09                             biob1       /done
+01da ---- 2713                             iobtst      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SCL >> 3))]
+01db ---- ae07                             biob1       /done
+01dc ---- 2713                             iobtst      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SCL >> 3))]
+01dd ---- ae05                             biob1       /done
+01de ---- 2713                             iobtst      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SCL >> 3))]
+01df ---- ae03                             biob1       /done
+
+01e0 ---- d801                         add         R5, #1;
+01e1 ---- bef4                         bnz         /waitLoop
+
+               /timeout:               ; Timeout has occurred, so OR it into the flags and bail out
+01e2 ---- e202                         or          R6, #0x0002
+
+               /done:                  ; Done
+01e3 ---- adb7                         rts
+
+
+
+
+               ; Register backup
+               i2cDeviceCommonBackupR0:
+01e4 ---- 0000                         dw          #0x0000
+               i2cDeviceCommonBackupR5:
+01e5 ---- 0000                         dw          #0x0000
+               i2cDeviceCommonBackupR7:
+01e6 ---- 0000                         dw          #0x0000
+
+               ; Return address i2cDeviceXyz() procedures
+               i2cDeviceCommonReturn:
+01e7 ---- 0000                         dw          #0x0000
+
+
+
+
+               ; PARAMETERS:
+               ;     R7 = I2C address
+               ;     R6 = Status flags
+               ;     R5 = Register address
+               ;     R4 = Register value
+               ;
+               ; RETURN VALUES:
+               ;     R6 = Updated status flags
+               ;
+               ; CLOBBERS:
+               ;     R5, R7
+               ;     R0 must be restored from i2cDeviceCommonBackupR0 after return
+               I2cDeviceWriteReg8:
+                                       ; Backup R0 (return) and R5 (register address)
+01e8 ---- 0de4                         st          R0, [#i2cDeviceCommonBackupR0]
+01e9 ---- 5de5                         st          R5, [#i2cDeviceCommonBackupR5]
+
+                                       ; Start condition
+01ea ---- 15cd                         jsr         I2cStart
+
+                                       ; Transmit the I2C address
+01eb ---- 15fe                         jsr         I2cTxByte
+
+                                       ; Transmit the register address
+01ec ---- 79e5                         ld          R7, [#i2cDeviceCommonBackupR5]
+01ed ---- 15fe                         jsr         I2cTxByte
+
+                                       ; Transmit the register value
+01ee ---- fd44                         ld          R7, R4
+01ef ---- 15fe                         jsr         I2cTxByte
+
+                                       ; Load the return address here to avoid pipeline hazard with "jmp R0"
+01f0 ---- 09e7                         ld          R0, [#i2cDeviceCommonReturn]
+
+                                       ; Stop condition
+01f1 ---- 15f3                         jsr         I2cStop
+
+                                       ; Done
+01f2 ---- 8db7                         jmp         R0
+
+
+
+
+               ; CLOBBERS:
+               ;     R5
+               I2cStop:
+                                       ; SDA = driven low
+01f3 ---- 460f                         iobclr      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+
+                                       ; Wait T_LOW
+01f4 ---- 53f4                         ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (1))
+01f5 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SCL = pull-up
+01f6 ---- 670f                         iobset      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                       ; Wait for SCL stretching to end or time out
+01f7 ---- 15d5                         jsr         I2cWaitSclStretch
+
+                                       ; Wait T_SU_STO
+01f8 ---- 53fd                         ld          R5, #-((I2C_BASE_DELAY) - (I2C_WAIT_STRETCH_DELAY + 1))
+01f9 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SDA = pull-up
+01fa ---- 660f                         iobset      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+
+                                       ; Wait T_BUF
+01fb ---- 53f5                         ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (2))
+01fc ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; Done
+01fd ---- adb7                         rts
+
+
+
+
+               ; PARAMETERS:
+               ;     R7 = TX byte shift register
+               ;     R6 = Status flags
+               ;
+               ; RETURN VALUES:
+               ;     R7 = Updated TX byte shift register
+               ;     R6 = Updated status flags
+               ;
+               ; CLOBBERS:
+               ;     R5
+               I2cTxByte:
+                                       ; Bail out if an error has occurred
+01fe ---- ea00                         cmp         R6, #0
+01ff ---- be1b                         bnz         /done
+
+
+                                       ; Transmit each bit in the data byte ...
+0200 ---- b50e                         loop        #8, /byteLoopEnd
+
+                                           ; Output the bit to SDA
+0201 ---- fda1                             lsl         R7, #1
+0202 8601 fc00                             tst         R7, #0x0100
+0204 ---- b602                             bz          /dataSdaLow
+0205 ---- 660f /dataSdaHigh:                   iobset      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+0206 ---- 8e02                             bra         /dataSdaDone
+0207 ---- 460f /dataSdaLow:                    iobclr      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+0208 ---- fd47                             nop
+               /dataSdaDone:
+                                           ; Wait T_LOW
+0209 ---- 53fa                             ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (7))
+020a ---- 15d2                             jsr         I2cWaitDelay
+
+                                           ; SCL = pull-up
+020b ---- 670f                             iobset      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                           ; Wait for SCL stretching to end or time out
+020c ---- 15d5                             jsr         I2cWaitSclStretch
+
+                                           ; Wait T_HIGH
+020d ---- 53fd                             ld          R5, #-(I2C_BASE_DELAY - (I2C_WAIT_STRETCH_DELAY + 1))
+020e ---- 15d2                             jsr         I2cWaitDelay
+
+                                           ; SCL = driven low
+020f ---- 470f                             iobclr      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+               /byteLoopEnd:
+
+                                       ; Receive the ACK bit
+                                       ; SDA = pull-up
+0210 ---- 660f                         iobset      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+
+                                       ; Wait T_LOW
+0211 ---- 53f4                         ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (1))
+0212 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SCL = pull-up
+0213 ---- 670f                         iobset      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                       ; Wait for SCL stretching to end or time out
+0214 ---- 15d5                         jsr         I2cWaitSclStretch
+
+                                       ; Wait T_HIGH
+0215 ---- 53fa                         ld          R5, #-((I2C_BASE_DELAY) - (3))
+0216 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; Read and store the SDA value in the status word
+0217 ---- 2613                         iobtst      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SDA >> 3))]
+0218 ---- a601                         biob0       /ackSdaLow
+0219 ---- e201                             or          R6, #0x01
+               /ackSdaLow:
+                                       ; SCL = driven low
+021a ---- 470f                         iobclr      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+
+               /done:                  ; Done
+021b ---- adb7                         rts
+
+
+
+
+               ; PARAMETERS:
+               ;     R7 = I2C address
+               ;     R6 = Status flags
+               ;     R5 = Register address
+               ;
+               ; RETURN VALUES:
+               ;     R7 = Register value
+               ;     R6 = Updated status flags
+               ;
+               ; CLOBBERS:
+               ;     R5, R7
+               ;     R0 must be restored from i2cDeviceCommonBackupR0 after return
+               I2cDeviceReadReg8:
+                                       ; Backup R0 (return), R5 (register address) and R7 (I2C address)
+021c ---- 0de4                         st          R0, [#i2cDeviceCommonBackupR0]
+021d ---- 5de5                         st          R5, [#i2cDeviceCommonBackupR5]
+021e ---- 7de6                         st          R7, [#i2cDeviceCommonBackupR7]
+
+                                       ; Start condition
+021f ---- 15cd                         jsr         I2cStart
+
+                                       ; Transmit the I2C address
+0220 ---- 15fe                         jsr         I2cTxByte
+
+                                       ; Transmit the register address
+0221 ---- 79e5                         ld          R7, [#i2cDeviceCommonBackupR5]
+0222 ---- 15fe                         jsr         I2cTxByte
+
+                                       ; If no error is indicated ...
+0223 ---- ea00                         cmp         R6, #0x0000
+0224 ---- be06                         bneq        /skipRx
+
+                                           ; Repeated start condition
+0225 ---- 15c7                             jsr         I2cRepeatedStart
+
+                                           ; Transmit the I2C address + R
+0226 ---- 79e6                             ld          R7, [#i2cDeviceCommonBackupR7]
+0227 ---- f201                             or          R7, #0x0001
+0228 ---- 15fe                             jsr         I2cTxByte
+
+                                           ; Receive the register value (transmit NAK)
+0229 ---- 7001                             ld          R7, #0x0001
+022a ---- 162e                             jsr         I2cRxByte
+               /skipRx:
+                                       ; Load the return address here to avoid pipeline hazard with "jmp R0"
+022b ---- 09e7                         ld          R0, [#i2cDeviceCommonReturn]
+
+                                       ; Stop condition
+022c ---- 15f3                         jsr         I2cStop
+
+                                       ; Done
+022d ---- 8db7                         jmp         R0
+
+
+
+
+               ; PARAMETERS:
+               ;     R7 = Acknowledgment bit value, 0x0000 to transmit ACK, 0x0001 to transmit NAK
+               ;     R6 = Status flags
+               ;
+               ; RETURN VALUES:
+               ;     R7 = RX byte shift register
+               ;     R6 = Updated status flags
+               ;
+               ; CLOBBERS:
+               ;     R5
+               I2cRxByte:
+                                       ; Bail out if an error has occurred
+022e ---- ea00                         cmp         R6, #0
+022f ---- be1c                         bnz         /done
+
+
+                                       ; Receive each bit in the data byte ...
+0230 ---- b50b                         loop        #8, /byteLoopEnd
+
+                                           ; SDA = pull-up
+0231 ---- 660f                             iobset      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+
+                                           ; Wait T_LOW
+0232 ---- 53f5                             ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (2))
+0233 ---- 15d2                             jsr         I2cWaitDelay
+
+                                           ; SCL = pull-up
+0234 ---- 670f                             iobset      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                           ; Wait for SCL stretching to end or time out
+0235 ---- 15d5                             jsr         I2cWaitSclStretch
+
+                                           ; Wait T_HIGH
+0236 ---- 53ff                             ld          R5, #-((I2C_BASE_DELAY) - (I2C_WAIT_STRETCH_DELAY + 3))
+0237 ---- 15d2                             jsr         I2cWaitDelay
+
+                                           ; Read and store SDA
+0238 ---- fda1                             lsl         R7, #1
+0239 ---- 2613                             iobtst      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODIN + (AUXIO_I2C_SDA >> 3))]
+023a ---- a601                             biob0       /dataSdaLow
+023b ---- f201                                 or          R7, #0x01
+               /dataSdaLow:
+                                           ; SCL = driven low
+023c ---- 470f                             iobclr      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+               /byteLoopEnd:
+
+                                       ; Transmit the ACK bit, which is now in bit 8 of the shift register
+                                       ; Output the bit to SDA
+023d 8601 fc00                         tst         R7, #0x0100
+023f ---- b602                         bz          /ackSdaLow
+0240 ---- 660f /ackSdaHigh:                iobset      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+0241 ---- 8e02                         bra         /ackSdaDone
+0242 ---- 460f /ackSdaLow:                 iobclr      #(AUXIO_I2C_SDA & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SDA >> 3))]
+0243 ---- fd47                         nop
+               /ackSdaDone:
+                                       ; Wait T_LOW
+0244 ---- 53f9                         ld          R5, #-((I2C_BASE_DELAY + I2C_EXT_DELAY) - (6))
+0245 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SCL = pull-up
+0246 ---- 670f                         iobset      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                       ; Wait for SCL stretching to end or time out
+0247 ---- 15d5                         jsr         I2cWaitSclStretch
+
+                                       ; Wait T_HIGH
+0248 ---- 53fd                         ld          R5, #-((I2C_BASE_DELAY) - (I2C_WAIT_STRETCH_DELAY + 1))
+0249 ---- 15d2                         jsr         I2cWaitDelay
+
+                                       ; SCL = driven low
+024a ---- 470f                         iobclr      #(AUXIO_I2C_SCL & 0x7), [#(IOP_AIODIO0_GPIODOUT + (AUXIO_I2C_SCL >> 3))]
+
+                                       ; Mask the ACK bit in the received data
+024b ---- f0ff                         and         R7, #0xFF
+
+
+               /done:                  ; Done
+024c ---- adb7                         rts
+
+
+
+
+               ; 3 + 5 CPU cycles = 16 clock cycles = 0.66 microsecond are added to the specified delay (parameter
+               ; loading and timer configuration)
+               ;
+               ; PARAMETERS:
+               ;     R7 = Delay
+               ;     R6 = Prescaler exponent
+               ;
+               ; CLOBBERS:
+               ;     R6
+               FwDelay:
+                                       ; Set the delay
+024d ---- fb0c                         out         R7, [#IOP_TIMER01_T0TARGET]
+
+                                       ; Configure the timer (from clock, single-mode, prescaler exponent = R6)
+024e ---- eda4                         lsl         R6, #4
+024f ---- eb09                         out         R6, [#IOP_TIMER01_T0CFG]
+
+                                       ; Start the timer, wait for it to trigger, and stop it
+0250 ---- 640b                         iobset      #0, [#IOP_TIMER01_T0CTL]
+0251 ---- cdb1                         wev1        #WEVSEL_TIMER0
+0252 ---- adb7                         rts
+
+
+
+
+               EvhSetupTrigger:
+                                       ; Disable and clear the vector flag
+0253 ---- 5527                         iobclr      #IOB_EVCTL_VECCFG1_VEC2_EN, [#IOP_EVCTL_VECCFG1]
+0254 ---- 6642                         iobset      #2, [#IOP_EVCTL_VECFLAGSCLR]
+
+                                       ; Configure and enable the vector flag (+ fixed configuration for channel 3)
+0255 862b f200                         or          R7, #(BV_EVCTL_VECCFG1_VEC3_EN | (EVCTL_VECEVSEL_AON_SW << IOB_EVCTL_VECCFG1_VEC3_EV))
+0257 ---- fb27                         out         R7, [#IOP_EVCTL_VECCFG1]
+0258 ---- adb7                         rts
+               .segment end "Procedure Library"
+
+
+; Generated by HP-ZBOOK-15 at 2025-01-30 14:44:27.275

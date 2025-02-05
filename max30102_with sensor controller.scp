@@ -1,0 +1,492 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="max30102withCC26402rf" version="2.9.0.208">
+    <desc><![CDATA[]]></desc>
+    <pattr name="Apply default power mode">0</pattr>
+    <pattr name="Board">None</pattr>
+    <pattr name="Chip name">CC2640R2F</pattr>
+    <pattr name="Chip package">QFN48 7x7 RGZ</pattr>
+    <pattr name="Chip revision">-</pattr>
+    <pattr name="Clock in active mode">0</pattr>
+    <pattr name="Code prefix"></pattr>
+    <pattr name="Default power mode">0</pattr>
+    <pattr name="Operating system">TI-RTOS</pattr>
+    <pattr name="Output directory">.</pattr>
+    <pattr name="RTC tick interval (16.16 format)">2000</pattr>
+    <pattr name="Run-time logging UART RX pin"></pattr>
+    <pattr name="Run-time logging UART TX pin"></pattr>
+    <task name="New task">
+        <desc><![CDATA[]]></desc>
+        <tattr name="MAX30102_ADDR" desc="0x57 in hex is the address of max30102 but sensor controller need to be lefted shift by one so 57*2=0xAE" type="expr_hex" content="const" scope="task" min="0" max="65535">0x00AE</tattr>
+        <tattr name="REG_FIFO_CONFIG" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0008</tattr>
+        <tattr name="REG_FIFO_DATA" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0007</tattr>
+        <tattr name="REG_FIFO_RD_PTR" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0006</tattr>
+        <tattr name="REG_FIFO_WR_PTR" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0004</tattr>
+        <tattr name="REG_INTR_ENABLE_1" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0002</tattr>
+        <tattr name="REG_INTR_ENABLE_2" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0003</tattr>
+        <tattr name="REG_INTR_STATUS_1" type="expr_hex" content="const" scope="task" min="0" max="65535">0x00000</tattr>
+        <tattr name="REG_INTR_STATUS_2" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0001</tattr>
+        <tattr name="REG_LED1_PA" type="expr_hex" content="const" scope="task" min="0" max="65535">0x000c</tattr>
+        <tattr name="REG_LED2_PA" type="expr_hex" content="const" scope="task" min="0" max="65535">0x000D</tattr>
+        <tattr name="REG_MODE_CONFIG" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0009</tattr>
+        <tattr name="REG_OVF_COUNTER" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0005</tattr>
+        <tattr name="REG_PILOT_PA" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0010</tattr>
+        <tattr name="REG_SPO2_CONFIG" type="expr_hex" content="const" scope="task" min="0" max="65535">0x000A</tattr>
+        <tattr name="REG_TEMP_CONFIG" type="expr_hex" content="const" scope="task" min="0" max="65535">0x0021</tattr>
+        <tattr name="REG_TEMP_FRAC" type="expr_hex" content="const" scope="task" min="0" max="65535">0x20</tattr>
+        <tattr name="REG_TEMP_INTR" type="expr_hex" content="const" scope="task" min="0" max="65535">0x001F</tattr>
+        <tattr name="buffer_size_share_readings_cpu_sc" desc="0 is red first byte ,1 red sencond  two byte,2 ir first  byte,3 it second two bytes,4temp integer  ,5 temp fraction " type="expr" content="const" scope="task" min="0" max="65535">35</tattr>
+        <tattr name="output.outputDataBuffer" desc="redLed and  ir led reading  each one is 32 bit  totoal size is 64 " size="buffer_size_share_readings_cpu_sc" type="expr_hex" content="struct_array" scope="task" min="0" max="65535">0</tattr>
+        <tattr name="output.outputsecondbuffer" size="buffer_size_share_readings_cpu_sc" type="expr_hex" content="struct_array" scope="task" min="0" max="65535">0</tattr>
+        <resource_ref name="ADC" enabled="0"/>
+        <resource_ref name="AON Domain Functionality" enabled="0"/>
+        <resource_ref name="Accumulator-Based Math" enabled="0"/>
+        <resource_ref name="Analog Open-Drain Pins" enabled="0"/>
+        <resource_ref name="Analog Open-Source Pins" enabled="0"/>
+        <resource_ref name="Analog Pins" enabled="0"/>
+        <resource_ref name="COMPA" enabled="0"/>
+        <resource_ref name="COMPA Event Trigger" enabled="0"/>
+        <resource_ref name="COMPB" enabled="0"/>
+        <resource_ref name="COMPB Event Trigger" enabled="0"/>
+        <resource_ref name="Delay Insertion" enabled="1"/>
+        <resource_ref name="Differential Output Pins" enabled="0"/>
+        <resource_ref name="Digital Input Pins" enabled="0"/>
+        <resource_ref name="Digital Open-Drain Pins" enabled="0"/>
+        <resource_ref name="Digital Open-Source Pins" enabled="0"/>
+        <resource_ref name="Digital Output Pins" enabled="0">
+            <io_usage name="redled" label="checking its working probably">
+                <uattr name="Configuration on uninitialization">-1</uattr>
+                <uattr name="Output drive strength">0</uattr>
+                <uattr name="Output value on initialization">0</uattr>
+                <uattr name="Pin count">0</uattr>
+                <uattr name="Pin/0000">DIO6</uattr>
+                <uattr name="Pin/0001"></uattr>
+                <uattr name="Pin/0002"></uattr>
+                <uattr name="Pin/0003"></uattr>
+                <uattr name="Pin/0004"></uattr>
+                <uattr name="Pin/0005"></uattr>
+                <uattr name="Pin/0006"></uattr>
+                <uattr name="Pin/0007"></uattr>
+                <uattr name="Pin/0008"></uattr>
+                <uattr name="Pin/0009"></uattr>
+                <uattr name="Pin/0010"></uattr>
+                <uattr name="Pin/0011"></uattr>
+                <uattr name="Pin/0012"></uattr>
+                <uattr name="Pin/0013"></uattr>
+                <uattr name="Pin/0014"></uattr>
+                <uattr name="Pin/0015"></uattr>
+                <uattr name="Pin/0016"></uattr>
+                <uattr name="Pin/0017"></uattr>
+                <uattr name="Pin/0018"></uattr>
+                <uattr name="Pin/0019"></uattr>
+                <uattr name="Pin/0020"></uattr>
+                <uattr name="Pin/0021"></uattr>
+                <uattr name="Pin/0022"></uattr>
+                <uattr name="Pin/0023"></uattr>
+                <uattr name="Pin/0024"></uattr>
+                <uattr name="Pin/0025"></uattr>
+                <uattr name="Pin/0026"></uattr>
+                <uattr name="Pin/0027"></uattr>
+                <uattr name="Pin/0028"></uattr>
+                <uattr name="Pin/0029"></uattr>
+                <uattr name="Pin/0030"></uattr>
+                <uattr name="Pin/0031"></uattr>
+            </io_usage>
+        </resource_ref>
+        <resource_ref name="Dynamic Power Control" enabled="0"/>
+        <resource_ref name="GPIO Event Trigger" enabled="0"/>
+        <resource_ref name="I2C Master" enabled="1">
+            <rattr name="SCL frequency">0</rattr>
+            <rattr name="SCL stretch timeout">1</rattr>
+            <io_usage>
+                <uattr name="Output drive strength">1</uattr>
+                <uattr name="SCL pin/0000">DIO4</uattr>
+                <uattr name="SDA pin/0000">DIO5</uattr>
+            </io_usage>
+        </resource_ref>
+        <resource_ref name="ISRC" enabled="0"/>
+        <resource_ref name="LCD Controller" enabled="0">
+            <rattr name="Waveform state count">8</rattr>
+            <io_usage>
+                <uattr name="Output drive strength">0</uattr>
+                <uattr name="Pin count">20</uattr>
+                <uattr name="Pin/0000"></uattr>
+                <uattr name="Pin/0001"></uattr>
+                <uattr name="Pin/0002"></uattr>
+                <uattr name="Pin/0003"></uattr>
+                <uattr name="Pin/0004"></uattr>
+                <uattr name="Pin/0005"></uattr>
+                <uattr name="Pin/0006"></uattr>
+                <uattr name="Pin/0007"></uattr>
+                <uattr name="Pin/0008"></uattr>
+                <uattr name="Pin/0009"></uattr>
+                <uattr name="Pin/0010"></uattr>
+                <uattr name="Pin/0011"></uattr>
+                <uattr name="Pin/0012"></uattr>
+                <uattr name="Pin/0013"></uattr>
+                <uattr name="Pin/0014"></uattr>
+                <uattr name="Pin/0015"></uattr>
+                <uattr name="Pin/0016"></uattr>
+                <uattr name="Pin/0017"></uattr>
+                <uattr name="Pin/0018"></uattr>
+                <uattr name="Pin/0019"></uattr>
+                <uattr name="Pin/0020"></uattr>
+                <uattr name="Pin/0021"></uattr>
+                <uattr name="Pin/0022"></uattr>
+                <uattr name="Pin/0023"></uattr>
+                <uattr name="Pin/0024"></uattr>
+                <uattr name="Pin/0025"></uattr>
+                <uattr name="Pin/0026"></uattr>
+                <uattr name="Pin/0027"></uattr>
+                <uattr name="Pin/0028"></uattr>
+                <uattr name="Pin/0029"></uattr>
+                <uattr name="Pin/0030"></uattr>
+                <uattr name="Pin/0031"></uattr>
+            </io_usage>
+        </resource_ref>
+        <resource_ref name="Math and Logic" enabled="0"/>
+        <resource_ref name="Multi-Buffered Output Data Exchange" enabled="0">
+            <rattr name="Buffer count">2</rattr>
+            <rattr name="Indicate overflow at buffer check">1</rattr>
+            <rattr name="Indicate overflow at buffer switch">0</rattr>
+            <rattr name="Prevent overflow at buffer switch">1</rattr>
+        </resource_ref>
+        <resource_ref name="Peripheral Sharing" enabled="0"/>
+        <resource_ref name="Pulse Counter" enabled="0"/>
+        <resource_ref name="RTC Multi-Event Capture" enabled="0"/>
+        <resource_ref name="RTC-Based Execution Scheduling" enabled="1"/>
+        <resource_ref name="Reference DAC" enabled="0"/>
+        <resource_ref name="Run-Time Logging" enabled="0"/>
+        <resource_ref name="SPI Chip Select" enabled="0"/>
+        <resource_ref name="SPI Data Transfer" enabled="0">
+            <rattr name="Bit rate">0</rattr>
+            <rattr name="MISO configuration when inactive">-1</rattr>
+            <rattr name="MOSI configuration on initialization">0</rattr>
+            <rattr name="MOSI configuration on uninitialization">0</rattr>
+            <rattr name="SCLK configuration on initialization">0</rattr>
+            <rattr name="SCLK configuration on uninitialization">0</rattr>
+            <io_usage>
+                <uattr name="MISO pin/0000"></uattr>
+                <uattr name="MOSI pin/0000"></uattr>
+                <uattr name="SCLK pin/0000"></uattr>
+            </io_usage>
+        </resource_ref>
+        <resource_ref name="Signal Observation" enabled="0"/>
+        <resource_ref name="System CPU Alert" enabled="1"/>
+        <resource_ref name="System Event Trigger" enabled="0"/>
+        <resource_ref name="TDC" enabled="0"/>
+        <resource_ref name="Timer 0" enabled="0"/>
+        <resource_ref name="Timer 0 Event Trigger" enabled="0"/>
+        <resource_ref name="Timer 1" enabled="0"/>
+        <resource_ref name="Timer 1 Event Trigger" enabled="1"/>
+        <resource_ref name="Timer 2" enabled="0"/>
+        <resource_ref name="Timer 2 Event Trigger" enabled="0"/>
+        <resource_ref name="UART Emulator" enabled="0">
+            <rattr name="RX buffer size">64</rattr>
+            <rattr name="Required idle period before enabling RX">11</rattr>
+            <rattr name="TX buffer size">64</rattr>
+            <io_usage>
+                <uattr name="RX pin/0000"></uattr>
+                <uattr name="TX pin/0000"></uattr>
+            </io_usage>
+        </resource_ref>
+        <sccode name="event0" init_power_mode="0"><![CDATA[fwGenAlertInterrupt();
+// Set up the next timer trigger (5minutes)
+evhSetupTimer1CustomTrigger(0);]]></sccode>
+        <sccode name="event1" init_power_mode="0"><![CDATA[]]></sccode>
+        <sccode name="event2" init_power_mode="0"><![CDATA[]]></sccode>
+        <sccode name="event3" init_power_mode="0"><![CDATA[]]></sccode>
+        <sccode name="execute" init_power_mode="0"><![CDATA[]]></sccode>
+        <sccode name="initialize" init_power_mode="0"><![CDATA[//here we will define the max30102 main functions
+//
+macro maxim_max30102_read_reg( uch_addr, puch_data) {
+    //puch_data will store the output data to this var
+    i2cDeviceReadReg8(MAX30102_ADDR,uch_addr;puch_data);
+
+}
+
+macro maxim_max30102_write_reg( uch_addr,  uch_data) {
+
+
+    //* \brief        Write a value to a MAX30102 register
+    //* \par          Details
+    //*               This function writes a value to a MAX30102 register
+
+    //* \param[in]    uch_addr    - register address
+    //* \param[in]    uch_data    - register data
+    //*
+    //* \retval       none
+
+
+    i2cDeviceWriteReg8(MAX30102_ADDR,uch_addr,uch_data);
+
+
+}
+
+///*sample rate& adc resolution
+
+//*The maximum sample rate for the ADC depends on the
+//*selected pulse width, which in turn, determines the ADC
+//resolution. For instance, if the pulse width is set to 69µs
+// the ADC resolution is 15 bits, and all sample rates are
+//selectable. However, if the pulse width is set to 411µs, then
+//the samples rates are limited. The allowed sample rates for
+//both SpO2 and HR Modes are summarized in the Table 11*/
+//and Table 12.
+macro maxim_max30102_init( ) {
+    U16 uch_dummy;
+    i2cStart();
+    maxim_max30102_read_reg(REG_INTR_STATUS_1,uch_dummy);  //Reads/clears the interrupt status register
+
+    maxim_max30102_write_reg(REG_INTR_ENABLE_1,0x00); // INTR setting
+
+    maxim_max30102_write_reg(REG_INTR_ENABLE_2,0x00);
+
+    maxim_max30102_write_reg(REG_FIFO_WR_PTR,0x00);  //FIFO_WR_PTR[4:0]
+
+    maxim_max30102_write_reg(REG_OVF_COUNTER,0x00);  //OVF_COUNTER[4:0]
+
+    maxim_max30102_write_reg(REG_FIFO_RD_PTR,0x00);  //FIFO_RD_PTR[4:0]
+
+    maxim_max30102_write_reg(REG_FIFO_CONFIG,0x50);  //sample avg = 4, fifo rollover=false, fifo almost full = 17 is equal 0x4f  i will be equal 0x01010000 wich mean rool over and 4 avrage sample
+    maxim_max30102_write_reg(REG_TEMP_CONFIG,0x1); // Enabling TEMP_EN
+
+    //commented to use in the wake up and start
+    //if(!maxim_max30102_write_reg(REG_MODE_CONFIG,0x07))   //0x02 for Red only, 0x03 for SpO2 mode 0x07 multimode LED
+    //  return false;
+    // maxim_max30102_write_reg(REG_MODE_CONFIG,0x02);//red only
+    maxim_max30102_write_reg(REG_SPO2_CONFIG,0x27); // SPO2_ADC range = 4096nA, SPO2 sample rate (100 Hz), LED pulseWidth (411uS) ADC res=18 bit
+
+
+    maxim_max30102_write_reg(REG_LED1_PA,0x00);  //Choose value for ~ 7mA for LED1=ir sample one is ir
+    maxim_max30102_write_reg(REG_LED2_PA,0x7f);  // Choose value for ~ 7mA for LED2=red
+
+    // commented till try as it isnot in datasheet
+    // maxim_max30102_write_reg(REG_PILOT_PA,0x7f); // Choose value for ~ 25mA for Pilot LED
+
+}
+//The FIFO registers (0x04–0x07) can all be written and read, but in practice only the FIFO_RD_PTR register should be
+//written to in operation. The others are automatically incremented or filled with data by the MAX30102. When starting a new
+//SpO2 or heart rate conversion, it is recommended to first clear the FIFO_WR_PTR, OVF_COUNTER, and FIFO_RD_PTR
+//registers to all zeroes (0x00) to ensure the FIFO is empty and in a known state. When reading the MAX30102 registers in
+//one burst-read I2C transaction, the register address pointer typically increments so that the next byte of data sent is from
+//the next register, etc. The exception to this is the FIFO data register, register 0x07. When reading this register, the address
+//pointer does not increment, but the FIFO_RD_PTR does. So the next byte of data sent represents the next byte of data
+//available in the FIFO.
+//#if defined(ARDUINO_AVR_UNO)
+//Arduino Uno doesn't have enough SRAM to store 100 samples of IR led data and red led data in 32-bit format
+//To solve this problem, 16-bit MSB of the sampled data will be truncated.  Samples become 16-bit data.
+macro maxim_max30102_read_fifo() {
+    // must wake up first
+    //bool maxim_max30102_read_fifo(uint32_t *pun_red_led, uint32_t *pun_ir_led)
+    //#endif
+
+    //* \brief        Read a set of samples from the MAX30102 FIFO register
+    //* \par          Details
+    //*               This function reads a set of samples from the MAX30102 FIFO register
+
+    //* \param[out]   *pun_red_led   - pointer that stores the red LED reading data
+    //* \param[out]   *pun_ir_led    - pointer that stores the IR LED reading data
+
+
+
+    U16 un_temp;
+    U16 un_temp2;
+    U16 un_temp3;
+    maxim_max30102_read_reg(REG_INTR_STATUS_1, un_temp);
+    maxim_max30102_read_reg(REG_INTR_STATUS_2, un_temp);
+
+
+
+
+
+    // Accelerometer (I2C address 0x43+W): Write X register address (0x04)
+    i2cStart();
+    i2cTx(MAX30102_ADDR | I2C_OP_WRITE);
+    i2cTx(REG_FIFO_DATA);
+
+    i2cStop();
+
+    for(U16 n=0;n<buffer_size_share_readings_cpu_sc; n++){
+
+
+        // Accelerometer (I2C address 0x43+R): Read X/Y/Z register values
+        i2cRepeatedStart();
+        i2cTx(MAX30102_ADDR | I2C_OP_READ);
+
+        //for ir led
+        i2cRxAck(un_temp);
+        i2cRxAck(un_temp2);
+        i2cRxAck(un_temp3);
+
+        //pop ir without store values
+
+        //for red led
+        i2cRxAck(un_temp);
+        i2cRxAck(un_temp2);
+        i2cRxNack(un_temp3);
+
+        //for red led store
+        //byte1--byte2--byte3
+        //(n-((n/2)*2)
+
+        //byte 1&2}
+
+
+
+        output.outputDataBuffer[n]=(((un_temp<<8)|un_temp2));//0x03fff
+        //   n+=1;
+        output.outputsecondbuffer[n]=un_temp3;
+        //byte1--byte2--byte3
+
+
+    }
+
+       output.outputDataBuffer[2]=5;//0x03fff
+    i2cStop();
+
+
+
+
+
+
+
+
+
+
+}
+
+macro maxim_max30102_reset() {
+    maxim_max30102_write_reg(REG_MODE_CONFIG,0x40);
+
+}
+
+macro maxim_max30102_wakeup(){
+
+    maxim_max30102_write_reg(REG_MODE_CONFIG,0x03);
+}
+macro maxim_max30102_shutdown(){
+
+    maxim_max30102_write_reg(REG_MODE_CONFIG,0x80);
+}
+macro maxim_max30102_read_temperature(){
+
+    maxim_max30102_write_reg(REG_TEMP_CONFIG,0x1); // Enabling TEMP_EN
+    //delayMicroseconds(1); // Let the processor do its work
+    // For proper conversion, read the integer part as uint8_t
+    U16 temp;
+    maxim_max30102_read_reg(REG_TEMP_INTR, temp); // 2's complement integer part of the temperature in degrees Celsius
+    output.outputDataBuffer[33]= temp;
+    maxim_max30102_read_reg(REG_TEMP_FRAC, temp); // Fractional part of the temperature in 1/16-th degree Celsius
+    output.outputDataBuffer[34]= temp;
+
+
+}
+macro maxim_max30102_start(){
+
+
+    maxim_max30102_init();  //initialize the MAX30102
+
+
+
+    fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+
+    //Continuously taking samples from MAX30102.  Heart rate and SpO2 are calculated every ST seconds
+
+
+    //buffer length of BUFFER_SIZE stores ST seconds of samples running at FS sps
+    //read BUFFER_SIZE samples, and determine the signal range
+    U16 uch_dummy=0;
+
+    maxim_max30102_read_reg(REG_INTR_STATUS_1,uch_dummy);
+
+
+    maxim_max30102_read_fifo();  //read from MAX30102 FIFO red and ir leds
+
+
+    //calculate heart rate and SpO2 after BUFFER_SIZE samples (ST seconds of samples) using MAXIM's method
+    // maxim_heart_rate_and_oxygen_saturation(aun_ir_buffer, BUFFER_SIZE, aun_red_buffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid);
+    //elapsedTime=millis()-timeStart;
+    //elapsedTime/=1000; // Time in seconds
+
+    // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+
+    // Read the _chip_ temperature in degrees Celsius
+
+    maxim_max30102_read_temperature();
+
+
+}
+
+
+
+
+
+
+//fwGenAlertInterrupt();
+
+
+// Set up Timer 1 to generate events at ~20 Hz
+//timer1StartWithTickSrc(TIMER1_TICKSRC_AON_RTC_4KHZ, 1, TIMER1_MODE_PERIODICAL, 94,7);
+
+// Setup the first timer trigger
+//evhSetupTimer1CustomTrigger(0);
+//The Initialization Code must schedule the first execution and/or setup the initial event trigger(s)
+//fwScheduleTask(1);
+///**********excution ******************/
+i2cStart();
+//maxim_max30102_init();  //initialize the MAX30102
+//maxim_max30102_shutdown();
+
+//maxim_max30102_start();
+
+U16 p=0;
+
+while(p<36) {
+
+
+    // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+
+    maxim_max30102_reset();
+
+
+    //fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+    maxim_max30102_wakeup();
+
+
+    // fwDelayUs(100000, FW_DELAY_RANGE_100_MS);//delay for 100 ms
+    maxim_max30102_start();
+
+
+    // maxim_max30102_read_temperature();
+
+
+
+    maxim_max30102_shutdown();
+
+
+    fwGenAlertInterrupt();
+    p+=1;
+
+}
+
+
+
+
+//fwGenAlertInterrupt();
+
+
+// Set up Timer 1 to generate events at ~20 Hz
+//timer1StartWithTickSrc(TIMER1_TICKSRC_AON_RTC_4KHZ, 1, TIMER1_MODE_PERIODICAL, 94,7);
+
+// Setup the first timer trigger
+//evhSetupTimer1CustomTrigger(0);
+//The Initialization Code must schedule the first execution and/or setup the initial event trigger(s)
+fwScheduleTask(1);]]></sccode>
+        <sccode name="terminate" init_power_mode="0"><![CDATA[]]></sccode>
+        <event_trigger active_count="1">0,1,2,3</event_trigger>
+        <tt_iter>run_execute,run_event0</tt_iter>
+        <tt_struct></tt_struct>
+        <rtl_struct></rtl_struct>
+        <rtl_task_sel en="1" struct_log_list="output"/>
+    </task>
+</project>
